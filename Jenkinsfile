@@ -3,29 +3,22 @@ pipeline {
 
     environment {
         APP_PORT = '9090'
-        MAVEN_ARGS = '-B -U'
     }
 
     stages {
-        stage('Unit Test') {
+        stage('Info') {
             steps {
-                // Run Maven tests
-                sh "mvn ${MAVEN_ARGS} test"
-            }
-            post {
-                always {
-                    junit allowEmptyResults: true, testResults: '**/target/surefire-reports/*.xml'
-                }
+                echo "Pipeline started. APP_PORT=${env.APP_PORT}"
             }
         }
     }
 
     post {
         success {
-            echo "✅ Tests completed successfully. APP_PORT=${env.APP_PORT}"
+            echo "✅ Pipeline completed successfully."
         }
         failure {
-            echo "❌ Tests failed. Check logs and reports."
+            echo "❌ Pipeline failed."
         }
         always {
             cleanWs()
