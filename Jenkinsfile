@@ -1,59 +1,46 @@
 pipeline {
+    // Use any agent
     agent any
 
-    tools {
-        jdk 'JDK17'       // Must match your Jenkins Global Tool name
-        maven 'Maven3'    // Must match your Jenkins Global Tool name
-    }
-
+    // Set the environment variable APP_PORT=9090
     environment {
         APP_PORT = '9090'
-        MAVEN_OPTS = '-Dmaven.test.failure.ignore=false'
-        MAVEN_CONFIG = '-B -U'
-    }
-
-    options {
-        ansiColor('xterm')
-        timestamps()
-        buildDiscarder(logRotator(numToKeepStr: '20'))
-        timeout(time: 20, unit: 'MINUTES')
+        // Optional Maven flags for non-interactive CI
+        MAVEN_ARGS = '-B -U'
     }
 
     stages {
-        stage('Checkout') {
-            steps {
-                checkout scm
-                sh 'git --no-pager log -1 --oneline || true'
-            }
-        }
-
         stage('Build') {
             steps {
-                sh "mvn ${MAVEN_CONFIG} -DskipTests clean package"
+                // Use the maven package phase to build the project
+                sh "mvn ${MAVEN_ARGS} -DskipTests clean package"
             }
         }
-
-        stage('Unit Tests') {
+        stage('Unit Test') {
             steps {
-                sh "mvn ${MAVEN_CONFIG} test"
+                 // Use the maven test phase to run unit tests
+                 sh "mvn ${MAVEN_ARGS} test"
             }
             post {
                 always {
-                    junit '**/target/surefire-reports/*.xml'
+                    // Publish JUnit test results if present
+                    junit allowEmptyResults: true, testResults: '**/target/surefire-reports/*.xml'
                 }
-            }
-        }
-
-        stage('Archive Artifacts') {
-            steps {
-                archiveArtifacts artifacts: 'target/*.jar', fingerprint: true
             }
         }
     }
 
     post {
-        success { echo "✅ Build successful!" }
-        failure { echo "❌ Build failed!" }
-        always   { cleanWs() }
+        success {
+            echo "✅ Build & tests succeeded. APP_PORT=${env.APP_PORT}"
+        }
+        failure {
+            echo "❌ Build or tests failed. Check logs and test reports."
+        }
+        always {
+            // Archive artifacts if a JAR is produced
+            archiveArtifacts artifacts: 'target/*.jar', fingerprint: true, allowEmptyArchive: true
+            cleanWs()
+        }
     }
 }
