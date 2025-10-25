@@ -1,11 +1,10 @@
 pipeline {
-    // Use any agent
     agent any
 
-    // Set the environment variable APP_PORT=9090
+    // Порт застосунку
     environment {
         APP_PORT   = '9090'
-        MAVEN_ARGS = '-B -U'  // non-interactive, оновлення snapshots
+        MAVEN_ARGS = '-B -U'     // non-interactive, update snapshots
     }
 
     options {
@@ -19,7 +18,6 @@ pipeline {
             steps {
                 checkout scm
                 echo "Branch: ${env.BRANCH_NAME ?: 'N/A'} | APP_PORT=${env.APP_PORT}"
-                // Додатково покажемо версії інструментів
                 script {
                     if (isUnix()) {
                         sh 'java -version || true; mvn -v || true'
@@ -56,41 +54,106 @@ pipeline {
             }
             post {
                 always {
-                    // Публікуємо результати Surefire
                     junit allowEmptyResults: true, testResults: '**/target/surefire-reports/*.xml'
                 }
             }
         }
 
         stage('Smoke Test (run on 9090)') {
-            when {
-                expression {
-                    // Виконуємо лише якщо існує артефакт у target/
-                    def cmd = isUnix()
-                        ? "bash -lc 'ls -1 target/*.war target/*.jar 2>/dev/null | wc -l'"
-                        : "cmd /c for %i in (target\\*.war target\\*.jar) do @set /a c+=1 & @echo %c%>count.txt & @type count.txt"
-                    def out = isUnix()
-                        ? sh(script: cmd, returnStdout: true).trim()
-                        : bat(script: cmd, returnStdout: true).trim()
-                    return out.isNumber() ? out.toInteger() > 0 : (out && out != '0')
-                }
-            }
             steps {
                 script {
-                    // Знаходимо артефакт
-                    def artifact = isUnix()
-                        ? sh(script: 'ls -1 target/*.war target/*.jar 2>/dev/null | head -n 1', returnStdout: true).trim()
-                        : bat(script: '@for %%i in (target\\*.war target\\*.jar) do (echo %%i & goto :found)\n:found', returnStdout: true).trim().split('\\r?\\n')[-1]
-
-                    if (!artifact) {
-                        error "Артефакт не знайдено в target/. Перевірте стадію Build."
-                    }
-
-                    echo "Starting ${artifact} on port ${env.APP_PORT}"
-
+                    // ---- Запуск на Linux ----
                     if (isUnix()) {
-                        // Запуск у бекграунді з логом
+                        // Спробуємо JAR, якщо нема — WAR
                         sh """
                             set -e
                             export APP_PORT=${APP_PORT}
-                            nohup java -jar "${artifact}" --server.port=${
+                            ARTIFACT=""
+                            if ls target/*.jar >/dev/null 2>&1; then ARTIFACT=$(ls -1 target/*.jar | head -n 1); fi
+                            if [ -z "$ARTIFACT" ] && ls target/*.war >/dev/null 2>&1; then ARTIFACT=$(ls -1 target/*.war | head -n 1); fi
+                            if [ -z "$ARTIFACT" ]; then
+                              echo "No artifact found in target/. Run Build stage first."
+                              exit 1
+                            fi
+                            echo "Starting $ARTIFACT on port ${APP_PORT}"
+                            nohup java -jar "$ARTIFACT" --server.port=${APP_PORT} > app.log 2>&1 &
+                            echo \$! > app.pid
+                        """
+                        sleep 12
+                        sh """
+                            for i in {1..15}; do
+                              if curl -sSf "http://localhost:${APP_PORT}/" > /dev/null; then
+                                echo "App is reachable on http://localhost:${APP_PORT}/"
+                                exit 0
+                              fi
+                              sleep 2
+                            done
+                            echo "App did not become ready on port ${APP_PORT}"
+                            exit 1
+                        """
+
+                    // ---- Запуск на Windows ----
+                    } else {
+                        // Запускаємо артефакт (спочатку JAR, потім WAR), лог у app.log
+                        bat """
+                            set APP_PORT=${APP_PORT}
+                            set ARTIFACT=
+                            for %%i in (target\\*.jar) do ( if not defined ARTIFACT set ARTIFACT=%%i )
+                            if not defined ARTIFACT (
+                                for %%i in (target\\*.war) do ( if not defined ARTIFACT set ARTIFACT=%%i )
+                            )
+                            if not defined ARTIFACT (
+                                echo No artifact found in target\\. Run Build stage first.
+                                exit /b 1
+                            )
+                            echo Starting %ARTIFACT% on port %APP_PORT%
+                            start "" cmd /c "java -jar \"%ARTIFACT%\" --server.port=%APP_PORT% 1> app.log 2>&1"
+                        """
+                        // Даємо час піднятися й перевіряємо доступність
+                        sleep 15
+                        // Перевірка через curl (Win10+). Якщо нема curl, можна замінити на PowerShell Invoke-WebRequest.
+                        bat """
+                            set APP_PORT=${APP_PORT}
+                            for /l %%t in (1,1,10) do (
+                                curl -s http://localhost:%APP_PORT%/ >nul 2>&1 && exit /b 0
+                                ping -n 2 127.0.0.1 >nul
+                            )
+                            echo App did not become ready on port %APP_PORT%
+                            exit /b 1
+                        """
+                    }
+                }
+            }
+            post {
+                always {
+                    script {
+                        if (isUnix()) {
+                            sh '''
+                                if [ -f app.pid ]; then
+                                  kill $(cat app.pid) 2>/dev/null || true
+                                  rm -f app.pid
+                                else
+                                  # fallback: kill by port
+                                  pids=$(lsof -ti tcp:'"'$APP_PORT'"') || true
+                                  [ -n "$pids" ] && kill $pids || true
+                                fi
+                            '''
+                        } else {
+                            // Вбиваємо процес, що слухає порт
+                            bat """
+                                for /f "tokens=5" %%p in ('netstat -ano ^| findstr ":%APP_PORT% " ^| findstr LISTENING') do taskkill /PID %%p /F >nul 2>&1
+                            """
+                        }
+                    }
+                    archiveArtifacts artifacts: 'target/*.jar, target/*.war, app.log', allowEmptyArchive: true, fingerprint: true
+                }
+            }
+        }
+    }
+
+    post {
+        success { echo "✅ Build, Unit Tests і Smoke Test пройшли успішно на порту ${env.APP_PORT}" }
+        failure { echo "❌ Помилка пайплайна. Перевірте Console Output і app.log (архівовано)" }
+        always  { cleanWs() }
+    }
+}
