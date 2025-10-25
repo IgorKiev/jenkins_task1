@@ -1,15 +1,9 @@
 pipeline {
     agent any
 
-    // Якщо налаштовані Global Tools у Jenkins, розкоментуйте і підставте свої назви:
-    // tools {
-    //     jdk   'jdk8'
-    //     maven 'maven-3.9.9'
-    // }
-
     environment {
         APP_PORT   = '9090'
-        MAVEN_ARGS = '-B -U'   // non-interactive, update snapshots
+        MAVEN_ARGS = '-B -U'
     }
 
     options {
@@ -24,8 +18,11 @@ pipeline {
                 checkout scm
                 echo "Branch: ${env.BRANCH_NAME ?: 'N/A'} | APP_PORT=${env.APP_PORT}"
                 script {
-                    if (isUnix()) { sh 'java -version || true; which mvn || true; ls -la mvnw || true' }
-                    else          { bat 'java -version & where mvn & dir mvnw.cmd' }
+                    if (isUnix()) {
+                        sh 'java -version || true; ls -la mvnw || true'
+                    } else {
+                        bat 'java -version & dir mvnw.cmd'
+                    }
                 }
             }
         }
@@ -33,11 +30,10 @@ pipeline {
         stage('Build') {
             steps {
                 script {
-                    // Визначаємо команду Maven: wrapper, якщо є; інакше системний mvn
-                    def mvnCmd = isUnix()
-                        ? (fileExists('mvnw')     ? './mvnw'    : 'mvn')
-                        : (fileExists('mvnw.cmd') ? 'mvnw.cmd'  : 'mvn')
-
+                    def mvnCmd = isUnix() ? './mvnw' : 'mvnw.cmd'
+                    if (!fileExists(isUnix() ? 'mvnw' : 'mvnw.cmd')) {
+                        error "Maven Wrapper not found. Add mvnw/mvnw.cmd to the repo (see instructions in job log)."
+                    }
                     if (isUnix()) {
                         sh "${mvnCmd} ${MAVEN_ARGS} -DskipTests clean package"
                     } else {
@@ -50,10 +46,7 @@ pipeline {
         stage('Unit Test') {
             steps {
                 script {
-                    def mvnCmd = isUnix()
-                        ? (fileExists('mvnw')     ? './mvnw'    : 'mvn')
-                        : (fileExists('mvnw.cmd') ? 'mvnw.cmd'  : 'mvn')
-
+                    def mvnCmd = isUnix() ? './mvnw' : 'mvnw.cmd'
                     if (isUnix()) {
                         sh "${mvnCmd} ${MAVEN_ARGS} test"
                     } else {
@@ -72,13 +65,9 @@ pipeline {
             steps {
                 script {
                     if (isUnix()) {
-                        // ---------- Linux/macOS ----------
-                        // Знаходимо артефакт
                         def artifact = sh(script: "ls -1 target/*.jar target/*.war 2>/dev/null | head -n 1", returnStdout: true).trim()
                         if (!artifact) { error "No artifact in target/. Did the Build stage succeed?" }
-
                         echo "Starting ${artifact} on port ${env.APP_PORT}"
-                        // Запуск у фоні; уникаємо export і зайвих $ у Groovy
                         sh """
                             nohup java -jar "${artifact}" --server.port=${env.APP_PORT} > app.log 2>&1 &
                             echo \$! > app.pid
@@ -96,8 +85,6 @@ pipeline {
                             exit 1
                         """
                     } else {
-                        // ---------- Windows ----------
-                        // Пошук артефакта (спершу JAR, потім WAR)
                         bat """
                             setlocal enabledelayedexpansion
                             set "ARTIFACT="
@@ -112,7 +99,6 @@ pipeline {
                             endlocal
                         """
                         sleep 15
-                        // Перевірка доступності (curl у Win10+ є)
                         bat """
                             for /l %%t in (1,1,20) do (
                                 curl -s http://localhost:${env.APP_PORT}/ >nul 2>&1 && exit /b 0
@@ -133,7 +119,6 @@ pipeline {
                                   kill $(cat app.pid) 2>/dev/null || true
                                   rm -f app.pid
                                 else
-                                  # fallback: kill by port
                                   pids=$(lsof -ti tcp:'"'"$APP_PORT"'"') || true
                                   [ -n "$pids" ] && kill $pids || true
                                 fi
