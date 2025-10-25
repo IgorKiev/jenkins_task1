@@ -5,7 +5,7 @@ pipeline {
     // Use Jenkins Global Tools (назви повинні 1:1 збігатися з вашою конфігурацією)
     tools {
         jdk   'jdk8'          // Manage Jenkins → Global Tool Configuration → JDK installations
-        maven 'maven-3.9.9'   // Manage Jenkins → Global Tool Configuration → Maven installations
+        maven 'maven-3.9.11'   // Manage Jenkins → Global Tool Configuration → Maven installations
     }
 
     // Set the environment variable APP_PORT=9090
@@ -159,3 +159,4 @@ pipeline {
         }
     }
 }
+
