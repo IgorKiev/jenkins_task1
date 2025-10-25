@@ -2,8 +2,8 @@ pipeline {
     agent any
 
     tools {
-        jdk 'JDK17'       // Use the exact names configured in Jenkins Global Tool Configuration
-        maven 'Maven3'
+        jdk 'JDK17'       // Must match your Jenkins Global Tool name
+        maven 'Maven3'    // Must match your Jenkins Global Tool name
     }
 
     environment {
@@ -22,7 +22,6 @@ pipeline {
     stages {
         stage('Checkout') {
             steps {
-                // Uses the SCM config from the job
                 checkout scm
                 sh 'git --no-pager log -1 --oneline || true'
             }
