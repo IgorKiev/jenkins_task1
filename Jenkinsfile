@@ -1,9 +1,17 @@
 pipeline {
+    // Use any agent
     agent any
 
+    // Use Jenkins Global Tools (назви повинні 1:1 збігатися з вашою конфігурацією)
+    tools {
+        jdk   'jdk8'          // Manage Jenkins → Global Tool Configuration → JDK installations
+        maven 'maven-3.9.9'   // Manage Jenkins → Global Tool Configuration → Maven installations
+    }
+
+    // Set the environment variable APP_PORT=9090
     environment {
         APP_PORT   = '9090'
-        MAVEN_ARGS = '-B -U'
+        MAVEN_ARGS = '-B -U'   // non-interactive, update snapshots
     }
 
     options {
@@ -19,9 +27,9 @@ pipeline {
                 echo "Branch: ${env.BRANCH_NAME ?: 'N/A'} | APP_PORT=${env.APP_PORT}"
                 script {
                     if (isUnix()) {
-                        sh 'java -version || true; ls -la mvnw || true'
+                        sh 'java -version || true; mvn -v || true'
                     } else {
-                        bat 'java -version & dir mvnw.cmd'
+                        bat 'java -version & mvn -v'
                     }
                 }
             }
@@ -29,15 +37,12 @@ pipeline {
 
         stage('Build') {
             steps {
+                // Use the maven package phase to build the project
                 script {
-                    def mvnCmd = isUnix() ? './mvnw' : 'mvnw.cmd'
-                    if (!fileExists(isUnix() ? 'mvnw' : 'mvnw.cmd')) {
-                        error "Maven Wrapper not found. Add mvnw/mvnw.cmd to the repo (see instructions in job log)."
-                    }
                     if (isUnix()) {
-                        sh "${mvnCmd} ${MAVEN_ARGS} -DskipTests clean package"
+                        sh "mvn ${MAVEN_ARGS} -DskipTests clean package"
                     } else {
-                        bat "${mvnCmd} %MAVEN_ARGS% -DskipTests clean package"
+                        bat "mvn %MAVEN_ARGS% -DskipTests clean package"
                     }
                 }
             }
@@ -45,17 +50,18 @@ pipeline {
 
         stage('Unit Test') {
             steps {
+                // Use the maven test phase to run unit tests
                 script {
-                    def mvnCmd = isUnix() ? './mvnw' : 'mvnw.cmd'
                     if (isUnix()) {
-                        sh "${mvnCmd} ${MAVEN_ARGS} test"
+                        sh "mvn ${MAVEN_ARGS} test"
                     } else {
-                        bat "${mvnCmd} %MAVEN_ARGS% test"
+                        bat "mvn %MAVEN_ARGS% test"
                     }
                 }
             }
             post {
                 always {
+                    // Publish JUnit test results (Surefire)
                     junit allowEmptyResults: true, testResults: '**/target/surefire-reports/*.xml'
                 }
             }
@@ -65,8 +71,10 @@ pipeline {
             steps {
                 script {
                     if (isUnix()) {
+                        // ---------- Linux/macOS ----------
                         def artifact = sh(script: "ls -1 target/*.jar target/*.war 2>/dev/null | head -n 1", returnStdout: true).trim()
-                        if (!artifact) { error "No artifact in target/. Did the Build stage succeed?" }
+                        if (!artifact) { error "No artifact found in target/. Did the Build stage succeed?" }
+
                         echo "Starting ${artifact} on port ${env.APP_PORT}"
                         sh """
                             nohup java -jar "${artifact}" --server.port=${env.APP_PORT} > app.log 2>&1 &
@@ -85,8 +93,10 @@ pipeline {
                             exit 1
                         """
                     } else {
+                        // ---------- Windows ----------
                         bat """
                             setlocal enabledelayedexpansion
+                            set "APP_PORT=${env.APP_PORT}"
                             set "ARTIFACT="
                             for %%i in (target\\*.jar) do if not defined ARTIFACT set "ARTIFACT=%%i"
                             if not defined ARTIFACT for %%i in (target\\*.war) do if not defined ARTIFACT set "ARTIFACT=%%i"
@@ -94,17 +104,18 @@ pipeline {
                               echo No artifact found in target\\
                               exit /b 1
                             )
-                            echo Starting !ARTIFACT! on port ${env.APP_PORT}
-                            start "" cmd /c "java -jar \"!ARTIFACT!\" --server.port=${env.APP_PORT} 1> app.log 2>&1"
+                            echo Starting !ARTIFACT! on port %APP_PORT%
+                            start "" cmd /c "java -jar \"!ARTIFACT!\" --server.port=%APP_PORT% 1> app.log 2>&1"
                             endlocal
                         """
                         sleep 15
                         bat """
+                            set "APP_PORT=${env.APP_PORT}"
                             for /l %%t in (1,1,20) do (
-                                curl -s http://localhost:${env.APP_PORT}/ >nul 2>&1 && exit /b 0
+                                curl -s http://localhost:%APP_PORT%/ >nul 2>&1 && exit /b 0
                                 ping -n 2 127.0.0.1 >nul
                             )
-                            echo App did not become ready on port ${env.APP_PORT}
+                            echo App did not become ready on port %APP_PORT%
                             exit /b 1
                         """
                     }
@@ -125,6 +136,7 @@ pipeline {
                             '''
                         } else {
                             bat """
+                                set "APP_PORT=${env.APP_PORT}"
                                 for /f "tokens=5" %%p in ('netstat -ano ^| findstr ":%APP_PORT% " ^| findstr LISTENING') do taskkill /PID %%p /F >nul 2>&1
                             """
                         }
@@ -136,8 +148,14 @@ pipeline {
     }
 
     post {
-        success { echo "✅ Build, Unit Tests і Smoke Test пройшли успішно на порту ${env.APP_PORT}" }
-        failure { echo "❌ Помилка пайплайна. Перевірте Console Output та app.log (архівовано)" }
-        always  { cleanWs() }
+        success {
+            echo "✅ Build, Unit Tests і Smoke Test пройшли успішно на порту ${env.APP_PORT}"
+        }
+        failure {
+            echo "❌ Помилка пайплайна. Перевірте Console Output та app.log (архівовано)"
+        }
+        always {
+            cleanWs()
+        }
     }
 }
