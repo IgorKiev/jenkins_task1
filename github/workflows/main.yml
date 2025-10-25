@@ -1,0 +1,30 @@
+name: Check Jenkins pipeline
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  checking-pipeline:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checks-out your repository
+        uses: actions/checkout@v5
+  
+      - name: Run Jenkinsfile
+        id: run_jenkinsfile
+        run: |
+          mvn_output=$(mvn --version)
+          MAVEN_HOME=$(echo "$mvn_output" | grep 'Maven home:' | awk '{print $3}')
+          docker run --rm -v $(pwd):/workspace -v $MAVEN_HOME:/mvn -v /local/jenkinsHome:/jenkinsHome \
+              -e PATH=$PATH:/opt/java/openjdk/jre/bin:/mvn/bin -e MAVEN_HOME=/mvn \
+              jenkins/jenkinsfile-runner --runHome /jenkinsHome
+
+      - name: Check Tests Result
+        run: 'if grep -q "Tests run: 4, Failures: 0" /local/jenkinsHome/jobs/job/builds/1/log;  then exit 0; else exit 1; fi'
+
+      - name: Check add Contacts
+        run: 'if grep -q "@Test checkAddContacts()" /local/jenkinsHome/jobs/job/builds/1/log;  then exit 0; else exit 1; fi'
+        
